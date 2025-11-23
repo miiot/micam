@@ -32,6 +32,8 @@ class RTSPBridge:
         self.process: Optional[subprocess.Popen] = None
         self.session: Optional[aiohttp.ClientSession] = None
         self.waiting_for_keyframe = True
+        self.ffmpeg_monitor_task: Optional[asyncio.Task] = None
+        self._ffmpeg_should_run = False
 
     async def _login(self) -> bool:
         """Login and retrieve access token."""
@@ -87,9 +89,19 @@ class RTSPBridge:
             stdout=subprocess.DEVNULL,  # Suppress FFmpeg stdout
             stderr=subprocess.PIPE,  # Capture stderr for debugging if needed
         )
+        self._ffmpeg_should_run = True
 
     def _stop_ffmpeg(self):
         """Stop FFmpeg process."""
+        self._ffmpeg_should_run = False
+        if self.ffmpeg_monitor_task:
+            self.ffmpeg_monitor_task.cancel()
+            try:
+                asyncio.get_running_loop().run_until_complete(self.ffmpeg_monitor_task)
+            except:
+                pass
+            self.ffmpeg_monitor_task = None
+
         if self.process:
             if self.process.poll() is None:
                 self.process.terminate()
@@ -99,9 +111,34 @@ class RTSPBridge:
                     self.process.kill()
             self.process = None
 
+    async def _monitor_ffmpeg(self):
+        """Monitor FFmpeg process and restart if it exits unexpectedly."""
+        while self._ffmpeg_should_run:
+            await asyncio.sleep(1)  # Check every second
+            if self.process and self.process.poll() is not None:
+                # FFmpeg process has exited
+                return_code = self.process.returncode
+                logger.warning(f"FFmpeg process exited with return code: {return_code}")
+
+                if self._ffmpeg_should_run:  # Only restart if we're supposed to keep running
+                    logger.info("Restarting FFmpeg process...")
+                    try:
+                        # Stop the old process
+                        self._stop_ffmpeg()
+                        # Start a new process
+                        self._start_ffmpeg()
+                        logger.info("FFmpeg process restarted successfully")
+                    except Exception as e:
+                        logger.error(f"Failed to restart FFmpeg process: {e}")
+                        # Wait a bit before trying again
+                        await asyncio.sleep(5)
+
     async def run(self):
         """Main loop to connect to WebSocket and pipe data."""
         self._start_ffmpeg()
+
+        # Start FFmpeg monitor task
+        self.ffmpeg_monitor_task = asyncio.create_task(self._monitor_ffmpeg())
 
         jar = aiohttp.CookieJar(unsafe=True)
         async with aiohttp.ClientSession(cookie_jar=jar) as session:
@@ -147,7 +184,8 @@ class RTSPBridge:
                             except BrokenPipeError as e:
                                 logger.error("FFmpeg process terminated unexpectedly. %s", e)
                                 await self.process_stderr()
-                                break
+                                # FFmpeg will be restarted by the monitor task, continue streaming
+                                continue
                         elif msg.type == aiohttp.WSMsgType.ERROR:
                             logger.error(f"WebSocket connection closed with error {ws.exception()}")
                             break
@@ -191,7 +229,11 @@ class RTSPBridge:
 
     async def process_write(self, data):
         if not self.process:
-            raise RuntimeError("Process not started")
+            logger.warning("FFmpeg process not available, waiting for restart...")
+            # Wait briefly to allow the monitor task to restart FFmpeg
+            await asyncio.sleep(0.1)
+            if not self.process or not self.process.stdin:
+                raise RuntimeError("FFmpeg process not available after restart attempt")
         if not self.process.stdin:
             raise RuntimeError("Process has no stdin")
         loop = asyncio.get_running_loop()
@@ -203,7 +245,8 @@ class RTSPBridge:
 
     async def process_stderr(self):
         if not self.process:
-            raise RuntimeError("Process not started")
+            logger.warning("FFmpeg process not available for stderr reading")
+            return
         if not self.process.stderr:
             return
         stderr = self.process.stderr.read().decode()
