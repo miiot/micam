@@ -4,9 +4,10 @@ services:
   miloco:
     container_name: miloco
     image: ghcr.nju.edu.cn/xiaomi/miloco-backend
-    network_mode: host
-    expose:
-      - ${MILOCO_PORT:-8000}
+    networks:
+      - micam_miloco
+    ports:
+      - ${MILOCO_PORT:-8000}:8000
     environment:
       BACKEND_HOST: ${MILOCO_HOST:-0.0.0.0}
       BACKEND_PORT: ${MILOCO_PORT:-8000}
@@ -23,7 +24,11 @@ services:
   go2rtc:
     container_name: go2rtc
     image: ghcr.nju.edu.cn/alexxit/go2rtc
-    network_mode: host       # important for WebRTC, HomeKit, UDP cameras
+    networks:
+      - micam_miloco
+    ports:
+      - ${GO2RTC_HTTP_PORT:-1984}:1984    # WebUI and
+      - 8554:8554
     privileged: true         # only for FFmpeg hardware transcoding
     restart: unless-stopped  # autorestart on fail or config change from WebUI
     environment:
@@ -33,6 +38,8 @@ services:
 
   micam1: &micam
     image: ghcr.nju.edu.cn/miiot/micam:main
+    networks:
+      - micam_miloco
     depends_on: [miloco, go2rtc]
     environment: &micam_envs
       MILOCO_BASE_URL: ${MILOCO_BASE_URL:-https://miloco:8000}
@@ -45,10 +52,14 @@ services:
     restart: always
 
   # More Cameras ...
-  micam2:
-    <<: *micam
-    scale: 0 # disabled
-    environment:
-      <<: *micam_envs
-      CAMERA_ID: ${CAMERA_2_ID}
-      RTSP_URL: ${CAMERA_2_RTSP_URL}
+  # micam2:
+  #   <<: *micam
+  #   scale: 0 # disabled
+  #   environment:
+  #     <<: *micam_envs
+  #     CAMERA_ID: ${CAMERA_2_ID}
+  #     RTSP_URL: ${CAMERA_2_RTSP_URL}
+networks:
+  micam_miloco:
+    name: micam_miloco
+    driver: bridge
