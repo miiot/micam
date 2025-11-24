@@ -7,7 +7,7 @@ services:
     networks:
       - micam_miloco
     ports:
-      - ${MILOCO_PORT:-8000}:8000
+      - ${MILOCO_PORT:-8000}:${MILOCO_PORT:-8000}
     environment:
       BACKEND_HOST: ${MILOCO_HOST:-0.0.0.0}
       BACKEND_PORT: ${MILOCO_PORT:-8000}
@@ -27,8 +27,8 @@ services:
     networks:
       - micam_miloco
     ports:
-      - ${GO2RTC_HTTP_PORT:-1984}:1984    # WebUI and
-      - 8554:8554
+      - ${GO2RTC_HTTP_PORT:-1984}:${GO2RTC_HTTP_PORT:-1984}    # WebUI and
+      - ${GO2RTC_RTSP_PORT:-8554}:${GO2RTC_RTSP_PORT:-8554}
     privileged: true         # only for FFmpeg hardware transcoding
     restart: unless-stopped  # autorestart on fail or config change from WebUI
     environment:
